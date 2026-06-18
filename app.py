@@ -96,7 +96,7 @@ Règles :
 """
 
     response = client.responses.create(
-        model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         input=[
             {
                 "role": "user",
