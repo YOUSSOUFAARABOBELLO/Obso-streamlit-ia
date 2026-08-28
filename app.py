@@ -1,4 +1,4 @@
-import base64,json,os,re
+import base64,json,os,re,hashlib
 from io import BytesIO
 import pandas as pd
 import streamlit as st
@@ -103,6 +103,19 @@ def analyse(i):
     if e or not life:st.error('Erreur cycle de vie : '+str(e));return ident,None
     add_row(make_row(i,ident,life));return ident,life
 
+
+def plate_uid(uploaded):
+    """Identifiant stable lié au contenu de l'image, pas à sa position dans la liste."""
+    return hashlib.sha1(uploaded.getvalue()).hexdigest()[:12]
+
+def load_plate_into_widgets(uid, plate):
+    """Force les champs Streamlit à prendre les nouvelles valeurs OCR."""
+    st.session_state[f'fab_{uid}'] = plate.get('fabricant', '')
+    st.session_state[f'ref_{uid}'] = plate.get('reference', '')
+    st.session_state[f'mod_{uid}'] = plate.get('modele_type', '')
+    st.session_state[f'ser_{uid}'] = plate.get('numero_serie', '')
+    st.session_state[f'fam_{uid}'] = plate.get('famille_equipement', '')
+
 if 'rows' not in st.session_state:st.session_state.rows=[]
 mode=st.radio("Mode d'entrée",['À partir de plaques signalétiques',"À partir d'informations clés"],horizontal=True)
 
@@ -120,38 +133,115 @@ if mode=="À partir d'informations clés":
     if st.session_state.get('mi') and st.session_state.get('ml'):show(st.session_state.mi,st.session_state.ml)
 else:
     st.header('Analyse à partir de plaques signalétiques')
-    files=st.file_uploader('Importer une ou plusieurs photos de plaques',type=['png','jpg','jpeg','webp'],accept_multiple_files=True)
-    if files and st.button('🚀 Analyser toutes les plaques',type='primary'):
-        bar=st.progress(0)
-        for n,f in enumerate(files):
-            plate,e=read_plate(f)
-            if e or not plate:st.error(f'{f.name} — {e}')
+    files = st.file_uploader(
+        'Importer une ou plusieurs photos de plaques',
+        type=['png','jpg','jpeg','webp'],
+        accept_multiple_files=True
+    )
+
+    if files and st.button('🚀 Analyser toutes les plaques', type='primary'):
+        bar = st.progress(0)
+        for n, f in enumerate(files):
+            uid = plate_uid(f)
+            plate, e = read_plate(f)
+            if e or not plate:
+                st.error(f'{f.name} — {e}')
             else:
-                ident,life=analyse(plate);st.session_state[f'p{n}']=plate
-                if ident:st.session_state[f'i{n}']=ident
-                if life:st.session_state[f'l{n}']=life
-            bar.progress((n+1)/len(files))
+                # Stocke le nouveau résultat OCR ET remplace explicitement
+                # les valeurs affichées dans les champs.
+                st.session_state[f'p_{uid}'] = plate
+                load_plate_into_widgets(uid, plate)
+
+                ident, life = analyse(plate)
+                if ident:
+                    st.session_state[f'i_{uid}'] = ident
+                if life:
+                    st.session_state[f'l_{uid}'] = life
+
+            bar.progress((n + 1) / len(files))
+
     if files:
-        for n,f in enumerate(files):
-            st.divider();st.subheader(f'Équipement {n+1} — {f.name}');left,right=st.columns([1,1.35])
+        for n, f in enumerate(files):
+            uid = plate_uid(f)
+
+            st.divider()
+            st.subheader(f'Équipement {n + 1} — {f.name}')
+            left, right = st.columns([1, 1.35])
+
             with left:
-                st.image(f,use_container_width=True)
-                if st.button('Lire cette plaque',key=f'read{n}'):
-                    p,e=read_plate(f)
-                    if e:st.error(e)
-                    elif p:st.session_state[f'p{n}']=p
-                p=st.session_state.get(f'p{n}')
+                st.image(f, use_container_width=True)
+
+                if st.button('Lire cette plaque', key=f'read_{uid}'):
+                    p, e = read_plate(f)
+                    if e or not p:
+                        st.error(e)
+                    else:
+                        # IMPORTANT :
+                        # une nouvelle lecture doit écraser les anciennes valeurs
+                        # conservées par st.text_input dans session_state.
+                        st.session_state[f'p_{uid}'] = p
+                        load_plate_into_widgets(uid, p)
+
+                p = st.session_state.get(f'p_{uid}')
+
                 if p:
                     st.markdown('#### Informations lues — corrige si nécessaire')
-                    p['fabricant']=st.text_input('Fabricant',p.get('fabricant',''),key=f'fab{n}');p['reference']=st.text_input('Référence',p.get('reference',''),key=f'ref{n}');p['modele_type']=st.text_input('Modèle / type',p.get('modele_type',''),key=f'mod{n}');p['numero_serie']=st.text_input('Numéro de série',p.get('numero_serie',''),key=f'ser{n}');p['famille_equipement']=st.text_input('Famille / désignation',p.get('famille_equipement',''),key=f'fam{n}')
+
+                    # Les champs utilisent un identifiant basé sur l'image.
+                    # Ainsi une autre photo ne récupère plus les valeurs de la photo précédente.
+                    fabricant = st.text_input(
+                        'Fabricant',
+                        key=f'fab_{uid}'
+                    )
+                    reference = st.text_input(
+                        'Référence',
+                        key=f'ref_{uid}'
+                    )
+                    modele = st.text_input(
+                        'Modèle / type',
+                        key=f'mod_{uid}'
+                    )
+                    serie = st.text_input(
+                        'Numéro de série',
+                        key=f'ser_{uid}'
+                    )
+                    famille = st.text_input(
+                        'Famille / désignation',
+                        key=f'fam_{uid}'
+                    )
+
+                    # Synchronise les corrections manuelles avec l'objet utilisé pour l'analyse.
+                    p = dict(p)
+                    p['fabricant'] = fabricant
+                    p['reference'] = reference
+                    p['modele_type'] = modele
+                    p['numero_serie'] = serie
+                    p['famille_equipement'] = famille
+                    st.session_state[f'p_{uid}'] = p
+
             with right:
-                p=st.session_state.get(f'p{n}')
-                if p and st.button('🔎 Identifier, rechercher le cycle de vie et ajouter au tableau',key=f'go{n}',type='primary'):
+                p = st.session_state.get(f'p_{uid}')
+
+                if p and st.button(
+                    '🔎 Identifier, rechercher le cycle de vie et ajouter au tableau',
+                    key=f'go_{uid}',
+                    type='primary'
+                ):
                     with st.spinner('Identification puis recherche du cycle de vie...'):
-                        ident,life=analyse(p)
-                        if ident:st.session_state[f'i{n}']=ident
-                        if life:st.session_state[f'l{n}']=life
-                if st.session_state.get(f'i{n}') and st.session_state.get(f'l{n}'):show(st.session_state[f'i{n}'],st.session_state[f'l{n}'])
+                        ident, life = analyse(p)
+                        if ident:
+                            st.session_state[f'i_{uid}'] = ident
+                        if life:
+                            st.session_state[f'l_{uid}'] = life
+
+                if (
+                    st.session_state.get(f'i_{uid}')
+                    and st.session_state.get(f'l_{uid}')
+                ):
+                    show(
+                        st.session_state[f'i_{uid}'],
+                        st.session_state[f'l_{uid}']
+                    )
 
 st.divider();st.header('Tableau de synthèse')
 if st.session_state.rows:
