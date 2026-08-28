@@ -25,15 +25,27 @@ def parse_json(t):
 def web_json(prompt):
     c,e=get_client()
     if e:return None,e
-    last=''
+    last=''; raw=''
     for tool in ('web_search','web_search_preview'):
         try:
             r=c.responses.create(model=SEARCH_MODEL,tools=[{'type':tool}],input=prompt)
-            d=parse_json(r.output_text)
+            raw=(r.output_text or '').strip()
+            d=parse_json(raw)
             if d:return d,None
-            last='Réponse JSON inexploitable.'
+            last='La recherche a répondu, mais le format doit être normalisé.'
+            break
         except Exception as x:last=str(x)
-    return None,last
+    if raw:
+        try:
+            normalizer=("Transforme le contenu ci-dessous en UN SEUL objet JSON valide. "
+                        "Ne fais aucune nouvelle recherche et n'ajoute aucune information. "
+                        "Conserve exactement les faits, valeurs, URLs et incertitudes. "
+                        "Ne mets ni markdown ni commentaire avant/après le JSON.\n\nCONTENU :\n"+raw)
+            r2=c.responses.create(model=MODEL,input=normalizer)
+            d=parse_json(r2.output_text)
+            if d:return d,None
+        except Exception as x:last=str(x)
+    return None,last or 'Réponse JSON inexploitable.'
 
 def read_plate(f):
     c,e=get_client()
@@ -171,7 +183,7 @@ else:
             with left:
                 st.image(f, use_container_width=True)
 
-                if st.button('Lire cette plaque', key=f'read_{uid}'):
+                if st.button('Lire / relire cette plaque', key=f'read_{uid}'):
                     p, e = read_plate(f)
                     if e or not p:
                         st.error(e)
@@ -185,7 +197,7 @@ else:
                 p = st.session_state.get(f'p_{uid}')
 
                 if p:
-                    st.markdown('#### Informations lues — corrige si nécessaire')
+                    st.markdown('#### Informations extraites de la plaque — vérifie et corrige si nécessaire')
 
                     # Les champs utilisent un identifiant basé sur l'image.
                     # Ainsi une autre photo ne récupère plus les valeurs de la photo précédente.
@@ -227,8 +239,15 @@ else:
                     key=f'go_{uid}',
                     type='primary'
                 ):
+                    current = dict(p)
+                    current['fabricant'] = st.session_state.get(f'fab_{uid}', current.get('fabricant',''))
+                    current['reference'] = st.session_state.get(f'ref_{uid}', current.get('reference',''))
+                    current['modele_type'] = st.session_state.get(f'mod_{uid}', current.get('modele_type',''))
+                    current['numero_serie'] = st.session_state.get(f'ser_{uid}', current.get('numero_serie',''))
+                    current['famille_equipement'] = st.session_state.get(f'fam_{uid}', current.get('famille_equipement',''))
+                    st.session_state[f'p_{uid}'] = current
                     with st.spinner('Identification puis recherche du cycle de vie...'):
-                        ident, life = analyse(p)
+                        ident, life = analyse(current)
                         if ident:
                             st.session_state[f'i_{uid}'] = ident
                         if life:
