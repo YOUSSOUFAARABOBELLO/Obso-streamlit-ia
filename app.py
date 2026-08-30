@@ -51,15 +51,31 @@ def read_plate(f):
     c,e=get_client()
     if e:return None,e
     data=base64.b64encode(f.getvalue()).decode(); mime=f.type or 'image/jpeg'
-    p='''Lis cette plaque industrielle. Retourne UNIQUEMENT ce JSON valide : {"fabricant":"","reference":"","modele_type":"","numero_serie":"","famille_equipement":"","caracteristiques":"","texte_lu":"","niveau_confiance":"","commentaire":""}. Ne devine pas les caractères illisibles et reproduis fidèlement référence et modèle/type.'''
+    p='''Lis cette plaque industrielle. Tu dois d'abord lire, puis évaluer la fiabilité de ta propre lecture.
+
+Retourne UNIQUEMENT ce JSON valide :
+{"fabricant":"","reference":"","modele_type":"","numero_serie":"","famille_equipement":"","caracteristiques":"","texte_lu":"","confiance_fabricant":"élevée|moyenne|faible|illisible","confiance_reference":"élevée|moyenne|faible|illisible","confiance_modele_type":"élevée|moyenne|faible|illisible","confiance_numero_serie":"élevée|moyenne|faible|illisible","niveau_confiance":"élevé|moyen|faible","statut_lecture_plaque":"confirmée|à vérifier|insuffisante","commentaire":""}
+
+RÈGLES :
+- N'invente jamais un texte absent ou illisible.
+- Reproduis fidèlement les caractères visibles, surtout la référence et le modèle/type.
+- Si un caractère est ambigu, ne transforme pas cette ambiguïté en certitude : indique une confiance faible ou illisible et explique brièvement dans commentaire.
+- statut_lecture_plaque = "confirmée" seulement si le fabricant ET la référence ou le modèle/type sont clairement lisibles avec une confiance élevée ou moyenne.
+- statut_lecture_plaque = "à vérifier" si l'équipement semble identifiable mais qu'un champ important comporte une ambiguïté.
+- statut_lecture_plaque = "insuffisante" si l'image ne permet pas d'identifier raisonnablement l'équipement.
+- Ce statut concerne seulement la lecture de la plaque, jamais le cycle de vie trouvé sur Internet.'''
     try:
         r=c.responses.create(model=MODEL,input=[{'role':'user','content':[{'type':'input_text','text':p},{'type':'input_image','image_url':f'data:{mime};base64,{data}'}]}])
         return parse_json(r.output_text),None
     except Exception as x:return None,str(x)
 
 def identify(info):
+    source_mode = info.get("_source_mode", "manual")
+    lecture_status = (info.get("_statut_lecture_plaque") or "").strip().lower()
+    manual_changed = bool(info.get("_manual_changed", False))
+
     p=f"""Tu dois IDENTIFIER précisément un équipement industriel, sans conclure sur son obsolescence.
-Données : {json.dumps(info,ensure_ascii=False)}
+Données : {json.dumps({k:v for k,v in info.items() if not k.startswith('_')},ensure_ascii=False)}
 
 OBJECTIF :
 - déterminer si les données correspondent bien à un équipement précis ;
@@ -75,16 +91,13 @@ RECHERCHE :
 
 RÈGLES :
 - IMPORTANT : l'identification et le cycle de vie sont deux choses différentes.
-- Tu ne dois JAMAIS dégrader le niveau d'identification parce que le statut de cycle de vie, l'EOL, l'EOS, le support ou la disponibilité ne sont pas connus.
-- Si les données saisies/lues montrent clairement une marque/fabricant et une référence précise, et qu'elles sont cohérentes avec une source ou avec la plaque elle-même, l'équipement peut être considéré comme identifié.
+- Tu ne dois JAMAIS dégrader le niveau d'identification parce que l'EOL, l'EOS, le support ou la disponibilité ne sont pas connus.
 - Une page correspondant exactement au fabricant + à la référence + au type d'équipement peut confirmer l'identification, même si le cycle de vie reste inconnu.
-- Si la plaque elle-même fournit clairement le fabricant/marque et la référence, conserve ces éléments dans l'identification, même si aucune source web externe n'est trouvée.
-- Dans ce cas, le niveau peut être "confirme" si la lecture est claire et cohérente, ou "probable" si une ambiguïté subsiste.
+- Si la plaque elle-même fournit clairement le fabricant/marque et la référence, conserve ces éléments dans l'identification.
 - "confirme" = fabricant/marque + référence/modèle suffisamment précis et cohérents pour désigner l'équipement.
-- "probable" = équipement identifiable mais une ambiguïté mineure subsiste sur la désignation ou la variante.
+- "probable" = équipement identifiable mais une ambiguïté mineure subsiste.
 - "insuffisant" = on ne sait réellement pas quel équipement est concerné.
-- Exemple : "Parker / SSD Parvex / GX4R090R0700" lu clairement sur la plaque = équipement identifié, même si aucun EOL ou statut constructeur n'est trouvé.
-- Si un distributeur est présenté comme agréé/officiel, exige une preuve explicite de cette relation. Sinon classe-le simplement "distributeur".
+- Si un distributeur est présenté comme agréé/officiel, exige une preuve explicite de cette relation.
 - N'invente rien et ne corrige pas silencieusement une référence.
 
 Retourne UNIQUEMENT ce JSON :
@@ -107,37 +120,49 @@ Retourne UNIQUEMENT ce JSON :
  ]
 }}"""
     result, err = web_json(p)
+
     if result:
-        # Garde-fou : l'absence d'information de cycle de vie ne doit jamais
-        # transformer un équipement clairement lu sur sa plaque en "non identifié".
         fab_in = (info.get("fabricant") or "").strip()
         ref_in = (info.get("reference") or "").strip()
         mod_in = (info.get("modele_type") or "").strip()
         fam_in = (info.get("famille_equipement") or "").strip()
 
-        if fab_in and (ref_in or mod_in):
-            if not result.get("fabricant_identifie"):
-                result["fabricant_identifie"] = fab_in
-            if not result.get("reference_confirmee") and ref_in:
-                result["reference_confirmee"] = ref_in
-            if not result.get("modele_type_confirme") and mod_in:
-                result["modele_type_confirme"] = mod_in
-            if not result.get("famille_identifiee") and fam_in:
-                result["famille_identifiee"] = fam_in
+        if not result.get("fabricant_identifie") and fab_in:
+            result["fabricant_identifie"] = fab_in
+        if not result.get("reference_confirmee") and ref_in:
+            result["reference_confirmee"] = ref_in
+        if not result.get("modele_type_confirme") and mod_in:
+            result["modele_type_confirme"] = mod_in
+        if not result.get("famille_identifiee") and fam_in:
+            result["famille_identifiee"] = fam_in
 
-            current_level = (result.get("niveau_identification") or "").lower()
-            if current_level == "insuffisant":
-                result["niveau_identification"] = "confirme"
-                base = (
-                    f"L'équipement est identifié à partir des informations clairement lisibles sur la plaque : "
-                    f"fabricant/marque {fab_in}"
-                )
-                if ref_in:
-                    base += f", référence {ref_in}"
-                if fam_in:
-                    base += f", désignation/famille {fam_in}"
-                base += ". L'absence éventuelle d'information sur l'EOL, l'EOS ou le support concerne uniquement le cycle de vie, pas l'identification."
-                result["resume_identification"] = base
+        if source_mode == "plate":
+            if manual_changed:
+                result["statut_validation"] = "Validé manuellement"
+                if fab_in and (ref_in or mod_in):
+                    result["niveau_identification"] = "confirme"
+                    result["resume_identification"] = (
+                        "Les informations d'identification utilisées pour la recherche ont été "
+                        "vérifiées ou corrigées manuellement à partir de la plaque."
+                    )
+                else:
+                    result["niveau_identification"] = "insuffisant"
+            else:
+                if lecture_status == "confirmée":
+                    result["statut_validation"] = "Confirmé à partir de la plaque"
+                    if fab_in and (ref_in or mod_in):
+                        result["niveau_identification"] = "confirme"
+                elif lecture_status == "à vérifier":
+                    result["statut_validation"] = "À vérifier"
+                    if result.get("niveau_identification") == "confirme":
+                        result["niveau_identification"] = "probable"
+                else:
+                    result["statut_validation"] = "Insuffisant"
+                    result["niveau_identification"] = "insuffisant"
+        else:
+            result["statut_validation"] = "Saisie manuelle"
+            if fab_in and (ref_in or mod_in) and result.get("niveau_identification") == "insuffisant":
+                result["niveau_identification"] = "probable"
 
         return result, err
     return result, err
@@ -238,6 +263,8 @@ def show(ident,life):
     a.markdown('**Fabricant identifié :** '+(ident.get('fabricant_identifie') or 'Non déterminé'))
     b.markdown('**Désignation :** '+(ident.get('designation_identifiee') or 'Non déterminée'))
     c.markdown("**Niveau d'identification :** "+(ident.get('niveau_identification') or 'insuffisant'))
+    if ident.get('statut_validation'):
+        st.markdown("**Validation de l'identification :** "+ident['statut_validation'])
     if ident.get('marque_actuelle_ou_groupe'):
         st.markdown('**Marque actuelle / groupe :** '+ident['marque_actuelle_ou_groupe'])
     if ident.get('reference_confirmee'):
@@ -312,6 +339,7 @@ def make_row(i,ident,life):
         'Désignation identifiée':ident.get('designation_identifiee',''),
         'Fabricant / groupe identifié':ident.get('fabricant_identifie','') or ident.get('marque_actuelle_ou_groupe',''),
         'Niveau identification':ident.get('niveau_identification',''),
+        "Validation identification":ident.get('statut_validation',''),
         'Statut cycle de vie':life.get('statut_cycle_vie',''),
         'Disponibilité commerciale':life.get('disponibilite_commerciale',''),
         'Conclusion':life.get('conclusion_obsolescence',''),
@@ -358,7 +386,7 @@ mode=st.radio("Mode d'entrée",['À partir de plaques signalétiques',"À partir
 if mode=="À partir d'informations clés":
     st.header("Saisie manuelle d'informations clés");st.caption("L'application identifie d'abord l'équipement, puis recherche son cycle de vie.")
     c1,c2=st.columns(2); fab=c1.text_input('Fabricant / constructeur'); mod=c2.text_input('Modèle / type'); ref=c1.text_input('Référence'); ser=c2.text_input('Numéro de série (facultatif)'); fam=st.text_input('Famille / désignation connue (facultatif)')
-    info={'fabricant':fab,'reference':ref,'modele_type':mod,'numero_serie':ser,'famille_equipement':fam}
+    info={'fabricant':fab,'reference':ref,'modele_type':mod,'numero_serie':ser,'famille_equipement':fam,'_source_mode':'manual','_manual_changed':False}
     if st.button('🔎 Identifier, rechercher le cycle de vie et ajouter au tableau',type='primary'):
         if not any((fab.strip(),ref.strip(),mod.strip())):st.warning('Renseigne au minimum le fabricant, la référence ou le modèle/type.')
         else:
@@ -386,7 +414,18 @@ else:
                 # Stocke le nouveau résultat OCR ET remplace explicitement
                 # les valeurs affichées dans les champs.
                 st.session_state[f'p_{uid}'] = plate
+                st.session_state[f'ocr_original_{uid}'] = {
+                    'fabricant': plate.get('fabricant',''),
+                    'reference': plate.get('reference',''),
+                    'modele_type': plate.get('modele_type',''),
+                    'numero_serie': plate.get('numero_serie',''),
+                    'famille_equipement': plate.get('famille_equipement',''),
+                }
                 load_plate_into_widgets(uid, plate)
+                plate['_source_mode'] = 'plate'
+                plate['_statut_lecture_plaque'] = plate.get('statut_lecture_plaque','')
+                plate['_manual_changed'] = False
+                st.session_state[f'p_{uid}'] = plate
 
                 ident, life = analyse(plate)
                 if ident:
@@ -416,12 +455,29 @@ else:
                         # une nouvelle lecture doit écraser les anciennes valeurs
                         # conservées par st.text_input dans session_state.
                         st.session_state[f'p_{uid}'] = p
+                        st.session_state[f'ocr_original_{uid}'] = {
+                            'fabricant': p.get('fabricant',''),
+                            'reference': p.get('reference',''),
+                            'modele_type': p.get('modele_type',''),
+                            'numero_serie': p.get('numero_serie',''),
+                            'famille_equipement': p.get('famille_equipement',''),
+                        }
                         load_plate_into_widgets(uid, p)
 
                 p = st.session_state.get(f'p_{uid}')
 
                 if p:
                     st.markdown('#### Informations extraites de la plaque — vérifie et corrige si nécessaire')
+                    lecture = (p.get('statut_lecture_plaque') or '').strip()
+                    if lecture:
+                        if lecture == 'confirmée':
+                            st.success('Lecture de la plaque : confirmée')
+                        elif lecture == 'à vérifier':
+                            st.warning('Lecture de la plaque : à vérifier — contrôle les champs avant la recherche.')
+                        else:
+                            st.error('Lecture de la plaque : insuffisante — certains champs importants ne sont pas lisibles avec assez de fiabilité.')
+                    if p.get('commentaire'):
+                        st.caption('Lecture IA : '+str(p.get('commentaire')))
 
                     # Les champs utilisent un identifiant basé sur l'image.
                     # Ainsi une autre photo ne récupère plus les valeurs de la photo précédente.
@@ -453,6 +509,17 @@ else:
                     p['modele_type'] = modele
                     p['numero_serie'] = serie
                     p['famille_equipement'] = famille
+
+                    original = st.session_state.get(f'ocr_original_{uid}', {})
+                    p['_source_mode'] = 'plate'
+                    p['_statut_lecture_plaque'] = p.get('statut_lecture_plaque', '')
+                    p['_manual_changed'] = any([
+                        fabricant.strip() != str(original.get('fabricant','')).strip(),
+                        reference.strip() != str(original.get('reference','')).strip(),
+                        modele.strip() != str(original.get('modele_type','')).strip(),
+                        serie.strip() != str(original.get('numero_serie','')).strip(),
+                        famille.strip() != str(original.get('famille_equipement','')).strip(),
+                    ])
                     st.session_state[f'p_{uid}'] = p
 
             with right:
