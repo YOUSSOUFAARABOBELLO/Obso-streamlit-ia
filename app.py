@@ -353,24 +353,39 @@ def make_row(i,ident,life):
         'Sources':' | '.join(s['url'] or s['titre'] for s in srcs(life.get('sources')))
     }
 
-def add_row(r):
-    key=tuple(str(r[x]).strip().lower() for x in ('Fabricant saisi/lu','Référence saisie/lue','Modèle / type'))
-    for n,o in enumerate(st.session_state.rows):
-        old=tuple(str(o[x]).strip().lower() for x in ('Fabricant saisi/lu','Référence saisie/lue','Modèle / type'))
-        if key==old and any(key):st.session_state.rows[n]=r;return
-    st.session_state.rows.append(r)
+def upsert_row(r, item_id):
+    """Ajoute ou met à jour UNE ligne pour cet équipement précis."""
+    if 'rows' not in st.session_state:
+        st.session_state.rows = []
+    if 'row_ids' not in st.session_state:
+        st.session_state.row_ids = []
 
-def analyse(i):
+    if item_id in st.session_state.row_ids:
+        pos = st.session_state.row_ids.index(item_id)
+        st.session_state.rows[pos] = r
+    else:
+        st.session_state.row_ids.append(item_id)
+        st.session_state.rows.append(r)
+
+def analyse(i, item_id):
     ident,e=identify(i)
-    if e or not ident:st.error('Erreur identification : '+str(e));return None,None
+    if e or not ident:
+        st.error('Erreur identification : '+str(e))
+        return None,None
     life,e=lifecycle(i,ident)
-    if e or not life:st.error('Erreur cycle de vie : '+str(e));return ident,None
-    add_row(make_row(i,ident,life));return ident,life
+    if e or not life:
+        st.error('Erreur cycle de vie : '+str(e))
+        return ident,None
+
+    upsert_row(make_row(i,ident,life), item_id)
+    return ident,life
 
 
-def plate_uid(uploaded):
-    """Identifiant stable lié au contenu de l'image, pas à sa position dans la liste."""
-    return hashlib.sha1(uploaded.getvalue()).hexdigest()[:12]
+def plate_uid(uploaded, index=0):
+    """Clé Streamlit unique même si exactement la même image est importée deux fois."""
+    h = hashlib.sha1(uploaded.getvalue()).hexdigest()[:12]
+    safe_name = re.sub(r'[^A-Za-z0-9_-]+', '_', uploaded.name or 'image')
+    return f"{index}_{safe_name}_{h}"
 
 def load_plate_into_widgets(uid, plate):
     """Force les champs Streamlit à prendre les nouvelles valeurs OCR."""
@@ -380,7 +395,9 @@ def load_plate_into_widgets(uid, plate):
     st.session_state[f'ser_{uid}'] = plate.get('numero_serie', '')
     st.session_state[f'fam_{uid}'] = plate.get('famille_equipement', '')
 
-if 'rows' not in st.session_state:st.session_state.rows=[]
+if 'rows' not in st.session_state: st.session_state.rows=[]
+if 'row_ids' not in st.session_state: st.session_state.row_ids=[]
+if 'equipment_registry' not in st.session_state: st.session_state.equipment_registry={}
 mode=st.radio("Mode d'entrée",['À partir de plaques signalétiques',"À partir d'informations clés"],horizontal=True)
 
 if mode=="À partir d'informations clés":
@@ -391,7 +408,7 @@ if mode=="À partir d'informations clés":
         if not any((fab.strip(),ref.strip(),mod.strip())):st.warning('Renseigne au minimum le fabricant, la référence ou le modèle/type.')
         else:
             with st.spinner("Identification puis recherche du cycle de vie..."):
-                ident,life=analyse(info)
+                ident,life=analyse(info,'manual_current')
                 if ident:st.session_state.mi=ident
                 if life:st.session_state.ml=life
     if st.session_state.get('mi') and st.session_state.get('ml'):show(st.session_state.mi,st.session_state.ml)
@@ -406,7 +423,7 @@ else:
     if files and st.button('🚀 Analyser toutes les plaques', type='primary'):
         bar = st.progress(0)
         for n, f in enumerate(files):
-            uid = plate_uid(f)
+            uid = plate_uid(f, n)
             plate, e = read_plate(f)
             if e or not plate:
                 st.error(f'{f.name} — {e}')
@@ -427,7 +444,7 @@ else:
                 plate['_manual_changed'] = False
                 st.session_state[f'p_{uid}'] = plate
 
-                ident, life = analyse(plate)
+                ident, life = analyse(plate, uid)
                 if ident:
                     st.session_state[f'i_{uid}'] = ident
                 if life:
@@ -436,10 +453,19 @@ else:
             bar.progress((n + 1) / len(files))
 
     if files:
+        seen_hashes = {}
         for n, f in enumerate(files):
-            uid = plate_uid(f)
+            uid = plate_uid(f, n)
+            image_hash = hashlib.sha1(f.getvalue()).hexdigest()
 
             st.divider()
+            if image_hash in seen_hashes:
+                st.warning(
+                    f"⚠️ Image identique à l’équipement {seen_hashes[image_hash] + 1}. "
+                    "Elle est conservée : deux équipements distincts peuvent néanmoins avoir la même référence."
+                )
+            else:
+                seen_hashes[image_hash] = n
             st.subheader(f'Équipement {n + 1} — {f.name}')
             left, right = st.columns([1, 1.35])
 
@@ -538,11 +564,40 @@ else:
                     current['famille_equipement'] = st.session_state.get(f'fam_{uid}', current.get('famille_equipement',''))
                     st.session_state[f'p_{uid}'] = current
                     with st.spinner('Identification puis recherche du cycle de vie...'):
-                        ident, life = analyse(current)
+                        ident, life = analyse(current, uid)
                         if ident:
                             st.session_state[f'i_{uid}'] = ident
                         if life:
                             st.session_state[f'l_{uid}'] = life
+                            st.session_state.equipment_registry[uid] = {
+                                'fabricant': current.get('fabricant',''),
+                                'reference': current.get('reference',''),
+                                'numero_serie': current.get('numero_serie','')
+                            }
+
+                            fab = (current.get('fabricant') or '').strip().lower()
+                            ref = (current.get('reference') or '').strip().lower()
+                            ser = (current.get('numero_serie') or '').strip().lower()
+                            for other_uid, other in st.session_state.equipment_registry.items():
+                                if other_uid == uid:
+                                    continue
+                                ofab = (other.get('fabricant') or '').strip().lower()
+                                oref = (other.get('reference') or '').strip().lower()
+                                oser = (other.get('numero_serie') or '').strip().lower()
+
+                                if fab and ref and fab == ofab and ref == oref:
+                                    if ser and oser and ser == oser:
+                                        st.warning(
+                                            "⚠️ Doublon très probable : même fabricant, même référence "
+                                            "et même numéro de série qu’un autre équipement."
+                                        )
+                                        break
+                                    elif not ser or not oser:
+                                        st.warning(
+                                            "⚠️ Doublon possible : même fabricant et même référence qu’un autre équipement, "
+                                            "mais le numéro de série ne permet pas de trancher."
+                                        )
+                                        break
 
                 if (
                     st.session_state.get(f'i_{uid}')
@@ -553,12 +608,61 @@ else:
                         st.session_state[f'l_{uid}']
                     )
 
-st.divider();st.header('Tableau de synthèse')
-if st.session_state.rows:
-    df=pd.DataFrame(st.session_state.rows);st.dataframe(df,use_container_width=True,hide_index=True)
-    st.download_button('Télécharger CSV',df.to_csv(index=False).encode('utf-8-sig'),'synthese_obsolescence.csv','text/csv')
-    buf=BytesIO()
-    with pd.ExcelWriter(buf,engine='openpyxl') as w:df.to_excel(w,index=False,sheet_name='Synthèse')
-    st.download_button('Télécharger Excel',buf.getvalue(),'synthese_obsolescence.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    if st.button('Vider le tableau'):st.session_state.rows=[];st.rerun()
-else:st.info('Le tableau se remplira automatiquement après chaque analyse.')
+
+st.divider()
+st.header('Tableau de synthèse')
+
+rows = st.session_state.get('rows', [])
+if rows:
+    df = pd.DataFrame(rows)
+
+    preferred_cols = [
+        'Fabricant saisi/lu',
+        'Référence saisie/lue',
+        'Désignation identifiée',
+        'Niveau identification',
+        'Validation identification',
+        'Statut cycle de vie',
+        'Disponibilité commerciale',
+        "Commentaire d'analyse",
+        'Action recommandée',
+        'Fin commercialisation',
+        'Fin support',
+        'Remplacement officiel',
+        'Référence remplacement',
+        'Niveau confiance',
+        'Sources'
+    ]
+    ordered = [c for c in preferred_cols if c in df.columns]
+    ordered += [c for c in df.columns if c not in ordered]
+    df = df[ordered]
+
+    st.caption(f"{len(df)} équipement(s) dans la synthèse")
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    c1,c2,c3 = st.columns(3)
+    with c1:
+        st.download_button(
+            '⬇️ Télécharger CSV',
+            df.to_csv(index=False).encode('utf-8-sig'),
+            'synthese_obsolescence.csv',
+            'text/csv'
+        )
+    with c2:
+        buf=BytesIO()
+        with pd.ExcelWriter(buf,engine='openpyxl') as w:
+            df.to_excel(w,index=False,sheet_name='Synthèse')
+        st.download_button(
+            '⬇️ Télécharger Excel',
+            buf.getvalue(),
+            'synthese_obsolescence.xlsx',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+    with c3:
+        if st.button('🗑️ Vider le tableau', key='clear_summary_table'):
+            st.session_state.rows=[]
+            st.session_state.row_ids=[]
+            st.session_state.equipment_registry={}
+            st.rerun()
+else:
+    st.info("Le tableau est vide. Lance l’analyse d’au moins un équipement pour créer la première ligne.")
