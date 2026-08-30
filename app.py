@@ -94,9 +94,11 @@ RÈGLES :
 - Tu ne dois JAMAIS dégrader le niveau d'identification parce que l'EOL, l'EOS, le support ou la disponibilité ne sont pas connus.
 - Une page correspondant exactement au fabricant + à la référence + au type d'équipement peut confirmer l'identification, même si le cycle de vie reste inconnu.
 - Si la plaque elle-même fournit clairement le fabricant/marque et la référence, conserve ces éléments dans l'identification.
-- "confirme" = fabricant/marque + référence/modèle suffisamment précis et cohérents pour désigner l'équipement.
-- "probable" = équipement identifiable mais une ambiguïté mineure subsiste.
-- "insuffisant" = on ne sait réellement pas quel équipement est concerné.
+- Les critères déterminants de l'identification sont : fabricant + référence et/ou modèle/type.
+- "confirme" = fabricant/marque + référence ou modèle/type suffisamment précis et cohérents pour désigner l'équipement.
+- Le numéro de série est complémentaire et ne doit pas faire passer une identification de "confirme" à "probable".
+- "probable" = une ambiguïté subsiste sur le FABRICANT ou sur la RÉFÉRENCE/MODÈLE.
+- "insuffisant" = le fabricant et la référence/modèle ne permettent réellement pas de savoir quel équipement est concerné.
 - Si un distributeur est présenté comme agréé/officiel, exige une preuve explicite de cette relation.
 - N'invente rien et ne corrige pas silencieusement une référence.
 
@@ -137,6 +139,18 @@ Retourne UNIQUEMENT ce JSON :
             result["famille_identifiee"] = fam_in
 
         if source_mode == "plate":
+            conf_fab = (info.get("confiance_fabricant") or "").strip().lower()
+            conf_ref = (info.get("confiance_reference") or "").strip().lower()
+            conf_mod = (info.get("confiance_modele_type") or "").strip().lower()
+            key_fields_clear = (
+                bool(fab_in) and bool(ref_in or mod_in)
+                and conf_fab in ("élevée","moyenne")
+                and (
+                    (bool(ref_in) and conf_ref in ("élevée","moyenne"))
+                    or (bool(mod_in) and conf_mod in ("élevée","moyenne"))
+                )
+            )
+
             if manual_changed:
                 result["statut_validation"] = "Validé manuellement"
                 if fab_in and (ref_in or mod_in):
@@ -148,7 +162,7 @@ Retourne UNIQUEMENT ce JSON :
                 else:
                     result["niveau_identification"] = "insuffisant"
             else:
-                if lecture_status == "confirmée":
+                if key_fields_clear or lecture_status == "confirmée":
                     result["statut_validation"] = "Confirmé à partir de la plaque"
                     if fab_in and (ref_in or mod_in):
                         result["niveau_identification"] = "confirme"
