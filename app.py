@@ -74,11 +74,16 @@ RECHERCHE :
 6) distributeur industriel spécialisé ou archive seulement en complément.
 
 RÈGLES :
+- IMPORTANT : l'identification et le cycle de vie sont deux choses différentes.
+- Tu ne dois JAMAIS dégrader le niveau d'identification parce que le statut de cycle de vie, l'EOL, l'EOS, le support ou la disponibilité ne sont pas connus.
+- Si les données saisies/lues montrent clairement une marque/fabricant et une référence précise, et qu'elles sont cohérentes avec une source ou avec la plaque elle-même, l'équipement peut être considéré comme identifié.
 - Une page correspondant exactement au fabricant + à la référence + au type d'équipement peut confirmer l'identification, même si le cycle de vie reste inconnu.
-- Ne mets pas "insuffisant" uniquement parce que l'EOL/EOS n'est pas connu : ici on juge seulement l'IDENTIFICATION.
-- "confirme" = correspondance suffisamment précise entre fabricant, référence/modèle et équipement.
-- "probable" = correspondance de gamme/famille mais pas de preuve exacte.
-- "insuffisant" = l'équipement lui-même ne peut pas être identifié de manière fiable.
+- Si la plaque elle-même fournit clairement le fabricant/marque et la référence, conserve ces éléments dans l'identification, même si aucune source web externe n'est trouvée.
+- Dans ce cas, le niveau peut être "confirme" si la lecture est claire et cohérente, ou "probable" si une ambiguïté subsiste.
+- "confirme" = fabricant/marque + référence/modèle suffisamment précis et cohérents pour désigner l'équipement.
+- "probable" = équipement identifiable mais une ambiguïté mineure subsiste sur la désignation ou la variante.
+- "insuffisant" = on ne sait réellement pas quel équipement est concerné.
+- Exemple : "Parker / SSD Parvex / GX4R090R0700" lu clairement sur la plaque = équipement identifié, même si aucun EOL ou statut constructeur n'est trouvé.
 - Si un distributeur est présenté comme agréé/officiel, exige une preuve explicite de cette relation. Sinon classe-le simplement "distributeur".
 - N'invente rien et ne corrige pas silencieusement une référence.
 
@@ -101,7 +106,41 @@ Retourne UNIQUEMENT ce JSON :
    }}
  ]
 }}"""
-    return web_json(p)
+    result, err = web_json(p)
+    if result:
+        # Garde-fou : l'absence d'information de cycle de vie ne doit jamais
+        # transformer un équipement clairement lu sur sa plaque en "non identifié".
+        fab_in = (info.get("fabricant") or "").strip()
+        ref_in = (info.get("reference") or "").strip()
+        mod_in = (info.get("modele_type") or "").strip()
+        fam_in = (info.get("famille_equipement") or "").strip()
+
+        if fab_in and (ref_in or mod_in):
+            if not result.get("fabricant_identifie"):
+                result["fabricant_identifie"] = fab_in
+            if not result.get("reference_confirmee") and ref_in:
+                result["reference_confirmee"] = ref_in
+            if not result.get("modele_type_confirme") and mod_in:
+                result["modele_type_confirme"] = mod_in
+            if not result.get("famille_identifiee") and fam_in:
+                result["famille_identifiee"] = fam_in
+
+            current_level = (result.get("niveau_identification") or "").lower()
+            if current_level == "insuffisant":
+                result["niveau_identification"] = "confirme"
+                base = (
+                    f"L'équipement est identifié à partir des informations clairement lisibles sur la plaque : "
+                    f"fabricant/marque {fab_in}"
+                )
+                if ref_in:
+                    base += f", référence {ref_in}"
+                if fam_in:
+                    base += f", désignation/famille {fam_in}"
+                base += ". L'absence éventuelle d'information sur l'EOL, l'EOS ou le support concerne uniquement le cycle de vie, pas l'identification."
+                result["resume_identification"] = base
+
+        return result, err
+    return result, err
 
 def lifecycle(info,ident):
     p=f"""Analyse le CYCLE DE VIE et la DISPONIBILITÉ COMMERCIALE de cet équipement industriel.
