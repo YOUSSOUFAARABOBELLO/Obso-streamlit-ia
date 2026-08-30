@@ -58,48 +58,233 @@ def read_plate(f):
     except Exception as x:return None,str(x)
 
 def identify(info):
-    p=f'''Tu dois d'abord IDENTIFIER précisément un équipement industriel, sans conclure encore sur son obsolescence.\nDonnées : {json.dumps(info,ensure_ascii=False)}\nRecherche obligatoirement : (1) référence/modèle EXACT + fabricant, (2) référence et modèle séparément si nécessaire, (3) gamme/famille, (4) historique fabricant, acquisition/changement de marque/groupe, (5) constructeur actuel si ancienne marque reprise. Priorité aux documents constructeur officiels; distributeurs/archives seulement en complément. Une page générale du fabricant ne confirme pas la référence exacte. Ne corrige pas silencieusement une référence et n'invente rien.\nRetourne UNIQUEMENT : {{"fabricant_identifie":"","marque_actuelle_ou_groupe":"","designation_identifiee":"","famille_identifiee":"","reference_confirmee":"","modele_type_confirme":"","niveau_identification":"confirme|probable|insuffisant","resume_identification":"","sources_identification":[{{"titre":"","url":"","type":"constructeur|document constructeur|distributeur|archive|autre"}}]}}\nconfirme = source reliant clairement la référence/modèle à l'équipement; probable = gamme/famille seulement; insuffisant = non fiable.'''
+    p=f"""Tu dois IDENTIFIER précisément un équipement industriel, sans conclure sur son obsolescence.
+Données : {json.dumps(info,ensure_ascii=False)}
+
+OBJECTIF :
+- déterminer si les données correspondent bien à un équipement précis ;
+- séparer l'identification de l'équipement de son statut de cycle de vie.
+
+RECHERCHE :
+1) fabricant + référence/modèle EXACT ;
+2) référence exacte seule si nécessaire ;
+3) documents/catalogues du constructeur ;
+4) site du constructeur actuel ou historique ;
+5) distributeur officiellement reconnu/agréé si cette relation peut être prouvée ;
+6) distributeur industriel spécialisé ou archive seulement en complément.
+
+RÈGLES :
+- Une page correspondant exactement au fabricant + à la référence + au type d'équipement peut confirmer l'identification, même si le cycle de vie reste inconnu.
+- Ne mets pas "insuffisant" uniquement parce que l'EOL/EOS n'est pas connu : ici on juge seulement l'IDENTIFICATION.
+- "confirme" = correspondance suffisamment précise entre fabricant, référence/modèle et équipement.
+- "probable" = correspondance de gamme/famille mais pas de preuve exacte.
+- "insuffisant" = l'équipement lui-même ne peut pas être identifié de manière fiable.
+- Si un distributeur est présenté comme agréé/officiel, exige une preuve explicite de cette relation. Sinon classe-le simplement "distributeur".
+- N'invente rien et ne corrige pas silencieusement une référence.
+
+Retourne UNIQUEMENT ce JSON :
+{{
+ "fabricant_identifie":"",
+ "marque_actuelle_ou_groupe":"",
+ "designation_identifiee":"",
+ "famille_identifiee":"",
+ "reference_confirmee":"",
+ "modele_type_confirme":"",
+ "niveau_identification":"confirme|probable|insuffisant",
+ "resume_identification":"",
+ "sources_identification":[
+   {{
+     "titre":"",
+     "url":"",
+     "type":"constructeur|document constructeur|distributeur agréé|distributeur|archive|autre",
+     "preuve_agrement":""
+   }}
+ ]
+}}"""
     return web_json(p)
 
 def lifecycle(info,ident):
-    p=f'''Analyse le CYCLE DE VIE de cet équipement.\nDonnées initiales : {json.dumps(info,ensure_ascii=False)}\nIdentification : {json.dumps(ident,ensure_ascii=False)}\nOrdre : constructeur actuel, constructeur historique, documents officiels EOL/EOS/arrêt/migration/catalogue/remplacement, puis sources secondaires fiables. Règles : difficulté à trouver != obsolète; page constructeur existante != actif; une source générale sur la marque ne prouve pas le statut; Actif ou Obsolète exige une preuve explicite; sinon statut_actuel = "À vérifier". Un remplacement n'est indiqué que s'il est documenté. N'invente aucune date, référence ou URL.\nRetourne UNIQUEMENT : {{"statut_actuel":"Actif|Obsolète|Fin de vie annoncée|À vérifier","conclusion_obsolescence":"","date_fin_commercialisation":"","date_fin_support":"","date_fin_service":"","remplacement_disponible":"Oui|Non|À vérifier","reference_remplacement":"","fabricant_remplacement":"","ce_que_dit_le_constructeur":"","preuve_statut":"","niveau_confiance":"Élevé|Moyen|Faible","sources":[{{"titre":"","url":"","type":"constructeur|document constructeur|distributeur|archive|autre"}}],"commentaire":""}}'''
+    p=f"""Analyse le CYCLE DE VIE et la DISPONIBILITÉ COMMERCIALE de cet équipement industriel.
+
+Données initiales : {json.dumps(info,ensure_ascii=False)}
+Identification : {json.dumps(ident,ensure_ascii=False)}
+
+Tu dois traiter CE CAS précis à partir des informations réellement trouvées. Ne réutilise pas une conclusion générique.
+
+ORDRE DE RECHERCHE :
+1) constructeur actuel ;
+2) constructeur historique ;
+3) documentation officielle : catalogue actuel, EOL, EOS, fin de commercialisation, fin de support, migration, remplacement ;
+4) distributeur officiellement reconnu/agréé si cette relation est prouvée ;
+5) distributeur industriel spécialisé fiable ;
+6) archives/autres sources seulement en complément.
+
+DISTINGUE TOUJOURS :
+A. statut du cycle de vie chez le constructeur ;
+B. disponibilité commerciale observée aujourd'hui.
+
+RÈGLES IMPORTANTES :
+- Un produit proposé à la vente ou "en stock" chez un distributeur prouve une disponibilité commerciale observée, PAS qu'il est encore fabriqué.
+- Un ancien stock peut continuer à être vendu après une fin de production.
+- Une difficulté à trouver la référence ne signifie pas qu'elle est obsolète.
+- Une page générale du constructeur ne prouve pas le statut d'une référence.
+- "Actif" exige une preuve claire que la référence/gamme est actuellement commercialisée ou supportée par le constructeur.
+- "Obsolète" exige une preuve claire de fin de vie/arrêt ou une information officielle équivalente.
+- "Fin de vie annoncée" exige une annonce/document explicite.
+- Si aucune preuve suffisante n'existe, utilise "Non déterminé", mais explique exactement ce qui EST connu.
+- Si la référence est trouvée en vente, indique "Disponible à la vente" ou "En stock" selon la preuve.
+- Ne dis "distributeur agréé" que si l'agrément/partenariat est explicitement prouvé.
+- Un remplacement officiel n'est indiqué que s'il est documenté.
+- N'invente aucune date, référence, URL, relation commerciale ou statut.
+
+Le COMMENTAIRE D'ANALYSE doit être court mais utile :
+- rappeler les faits trouvés pour cet équipement ;
+- expliquer ce que ces faits permettent ou ne permettent pas de conclure ;
+- ne pas répéter mécaniquement "informations insuffisantes".
+
+L'ACTION RECOMMANDÉE doit découler du cas :
+- par exemple contacter le constructeur pour confirmer maintien en production/EOL/EOS,
+- vérifier une référence de remplacement,
+- confirmer un stock,
+- ou aucune action immédiate si le statut actif est clairement établi.
+
+Retourne UNIQUEMENT ce JSON :
+{{
+ "statut_cycle_vie":"Actif|Obsolète|Fin de vie annoncée|Non déterminé",
+ "disponibilite_commerciale":"Disponible à la vente|En stock|Indisponible|Non déterminée",
+ "source_disponibilite":"",
+ "conclusion_obsolescence":"",
+ "date_fin_commercialisation":"",
+ "date_fin_support":"",
+ "date_fin_service":"",
+ "remplacement_disponible":"Oui|Non|Non déterminé",
+ "reference_remplacement":"",
+ "fabricant_remplacement":"",
+ "information_constructeur":"",
+ "preuve_cycle_vie":"",
+ "commentaire_analyse":"",
+ "action_recommandee":"",
+ "niveau_confiance":"Élevé|Moyen|Faible",
+ "sources":[
+   {{
+     "titre":"",
+     "url":"",
+     "type":"constructeur|document constructeur|distributeur agréé|distributeur|archive|autre",
+     "preuve_agrement":"",
+     "information_apportee":""
+   }}
+ ]
+}}"""
     return web_json(p)
 
 def srcs(v):
     if not v:return []
-    if isinstance(v,str):return [{'titre':v,'url':'','type':''}]
-    return [{'titre':str(x.get('titre') or x.get('title') or 'Source'),'url':str(x.get('url') or x.get('lien') or ''),'type':str(x.get('type') or '')} for x in v if isinstance(x,dict)]
+    if isinstance(v,str):
+        return [{'titre':v,'url':'','type':'','preuve_agrement':'','information_apportee':''}]
+    out=[]
+    for x in v:
+        if not isinstance(x,dict):continue
+        out.append({
+            'titre':str(x.get('titre') or x.get('title') or 'Source'),
+            'url':str(x.get('url') or x.get('lien') or ''),
+            'type':str(x.get('type') or ''),
+            'preuve_agrement':str(x.get('preuve_agrement') or ''),
+            'information_apportee':str(x.get('information_apportee') or '')
+        })
+    return out
 
 def show(ident,life):
     st.subheader("Identification de l'équipement")
     a,b,c=st.columns(3)
-    a.markdown('**Fabricant identifié :** '+(ident.get('fabricant_identifie') or 'À vérifier'))
-    b.markdown('**Désignation :** '+(ident.get('designation_identifiee') or 'À vérifier'))
+    a.markdown('**Fabricant identifié :** '+(ident.get('fabricant_identifie') or 'Non déterminé'))
+    b.markdown('**Désignation :** '+(ident.get('designation_identifiee') or 'Non déterminée'))
     c.markdown("**Niveau d'identification :** "+(ident.get('niveau_identification') or 'insuffisant'))
-    if ident.get('marque_actuelle_ou_groupe'):st.markdown('**Marque actuelle / groupe :** '+ident['marque_actuelle_ou_groupe'])
-    if ident.get('reference_confirmee'):st.markdown('**Référence confirmée :** '+ident['reference_confirmee'])
-    if ident.get('resume_identification'):st.info(ident['resume_identification'])
-    st.subheader('Résultat cycle de vie')
-    st.markdown('**Statut actuel : '+(life.get('statut_actuel') or 'À vérifier')+'**')
-    st.markdown('**Conclusion :** '+(life.get('conclusion_obsolescence') or "Le statut n'est pas confirmé."))
-    st.markdown('**Remplacement :** '+(life.get('remplacement_disponible') or 'À vérifier'))
-    if life.get('reference_remplacement'):st.markdown('**Référence de remplacement :** '+life['reference_remplacement'])
-    if life.get('date_fin_commercialisation'):st.markdown('**Fin de commercialisation :** '+life['date_fin_commercialisation'])
-    if life.get('date_fin_support'):st.markdown('**Fin de support :** '+life['date_fin_support'])
-    if life.get('preuve_statut'):st.markdown('**Élément de preuve :** '+life['preuve_statut'])
-    if life.get('ce_que_dit_le_constructeur'):st.markdown('**Information constructeur :** '+life['ce_que_dit_le_constructeur'])
+    if ident.get('marque_actuelle_ou_groupe'):
+        st.markdown('**Marque actuelle / groupe :** '+ident['marque_actuelle_ou_groupe'])
+    if ident.get('reference_confirmee'):
+        st.markdown('**Référence confirmée :** '+ident['reference_confirmee'])
+    if ident.get('modele_type_confirme'):
+        st.markdown('**Modèle / type confirmé :** '+ident['modele_type_confirme'])
+    if ident.get('resume_identification'):
+        st.info(ident['resume_identification'])
+
+    st.subheader('Analyse du cycle de vie')
+    a,b=st.columns(2)
+    a.markdown('**Statut du cycle de vie : '+(life.get('statut_cycle_vie') or 'Non déterminé')+'**')
+    b.markdown('**Disponibilité commerciale : '+(life.get('disponibilite_commerciale') or 'Non déterminée')+'**')
+
+    if life.get('source_disponibilite'):
+        st.markdown('**Disponibilité constatée via :** '+life['source_disponibilite'])
+    if life.get('date_fin_commercialisation'):
+        st.markdown('**Fin de commercialisation :** '+life['date_fin_commercialisation'])
+    else:
+        st.markdown('**Fin de commercialisation :** Non trouvée')
+    if life.get('date_fin_support'):
+        st.markdown('**Fin de support :** '+life['date_fin_support'])
+    else:
+        st.markdown('**Fin de support :** Non trouvée')
+
+    st.markdown('**Remplacement officiel :** '+(life.get('remplacement_disponible') or 'Non déterminé'))
+    if life.get('reference_remplacement'):
+        st.markdown('**Référence de remplacement :** '+life['reference_remplacement'])
+
+    if life.get('preuve_cycle_vie'):
+        st.markdown('**Éléments établissant le cycle de vie :** '+life['preuve_cycle_vie'])
+    if life.get('information_constructeur'):
+        st.markdown('**Information constructeur :** '+life['information_constructeur'])
+    if life.get('conclusion_obsolescence'):
+        st.markdown('**Conclusion :** '+life['conclusion_obsolescence'])
+
     st.markdown('**Niveau de confiance :** '+(life.get('niveau_confiance') or 'Faible'))
+
+    st.subheader("Commentaire d'analyse")
+    commentaire=life.get('commentaire_analyse') or (
+        "Les informations disponibles ne permettent pas encore de caractériser précisément "
+        "le cycle de vie de cette référence."
+    )
+    st.info(commentaire)
+
+    st.subheader('Action recommandée')
+    st.success(life.get('action_recommandee') or
+               "Compléter la recherche ou contacter le constructeur afin de lever les incertitudes restantes.")
+
     st.subheader('Sources')
     seen=set(); n=0
-    for s in srcs(ident.get('sources_identification'))+srcs(life.get('sources')):
+    all_sources=srcs(ident.get('sources_identification'))+srcs(life.get('sources'))
+    for s in all_sources:
         k=(s['titre'],s['url'])
         if k in seen:continue
-        seen.add(k);n+=1; suffix=f" — {s['type']}" if s['type'] else ''
-        st.markdown(f"- [{s['titre']}]({s['url']}){suffix}" if s['url'].startswith('http') else f"- {s['titre']}{suffix}")
-    if not n:st.warning("Aucune source exploitable n'a été retournée.")
+        seen.add(k);n+=1
+        suffix=f" — {s['type']}" if s['type'] else ''
+        line=f"[{s['titre']}]({s['url']}){suffix}" if s['url'].startswith('http') else f"{s['titre']}{suffix}"
+        st.markdown(f"- {line}")
+        if s.get('information_apportee'):
+            st.caption("Information apportée : "+s['information_apportee'])
+        if s.get('preuve_agrement'):
+            st.caption("Preuve du statut de distributeur agréé : "+s['preuve_agrement'])
+    if not n:
+        st.warning("Aucune source exploitable n'a été retournée.")
 
 def make_row(i,ident,life):
-    return {'Fabricant saisi/lu':i.get('fabricant',''),'Référence saisie/lue':i.get('reference',''),'Modèle / type':i.get('modele_type',''),'Désignation identifiée':ident.get('designation_identifiee',''),'Fabricant / groupe identifié':ident.get('fabricant_identifie','') or ident.get('marque_actuelle_ou_groupe',''),'Niveau identification':ident.get('niveau_identification',''),'Statut actuel':life.get('statut_actuel',''),'Conclusion':life.get('conclusion_obsolescence',''),'Fin commercialisation':life.get('date_fin_commercialisation',''),'Fin support':life.get('date_fin_support',''),'Remplacement':life.get('remplacement_disponible',''),'Référence remplacement':life.get('reference_remplacement',''),'Niveau confiance':life.get('niveau_confiance',''),'Sources':' | '.join(s['url'] or s['titre'] for s in srcs(life.get('sources')))}
+    return {
+        'Fabricant saisi/lu':i.get('fabricant',''),
+        'Référence saisie/lue':i.get('reference',''),
+        'Modèle / type':i.get('modele_type',''),
+        'Désignation identifiée':ident.get('designation_identifiee',''),
+        'Fabricant / groupe identifié':ident.get('fabricant_identifie','') or ident.get('marque_actuelle_ou_groupe',''),
+        'Niveau identification':ident.get('niveau_identification',''),
+        'Statut cycle de vie':life.get('statut_cycle_vie',''),
+        'Disponibilité commerciale':life.get('disponibilite_commerciale',''),
+        'Conclusion':life.get('conclusion_obsolescence',''),
+        'Fin commercialisation':life.get('date_fin_commercialisation',''),
+        'Fin support':life.get('date_fin_support',''),
+        'Remplacement officiel':life.get('remplacement_disponible',''),
+        'Référence remplacement':life.get('reference_remplacement',''),
+        "Commentaire d'analyse":life.get('commentaire_analyse',''),
+        'Action recommandée':life.get('action_recommandee',''),
+        'Niveau confiance':life.get('niveau_confiance',''),
+        'Sources':' | '.join(s['url'] or s['titre'] for s in srcs(life.get('sources')))
+    }
 
 def add_row(r):
     key=tuple(str(r[x]).strip().lower() for x in ('Fabricant saisi/lu','Référence saisie/lue','Modèle / type'))
