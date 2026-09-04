@@ -345,6 +345,22 @@ def show(ident,life):
     if not n:
         st.warning("Aucune source exploitable n'a été retournée.")
 
+
+def criticite_simplifiee(life):
+    """Criticité simplifiée alignée avec la matrice utilisée dans le mémoire."""
+    statut = str(life.get("statut_cycle_vie", "") or "").strip().lower()
+
+    # Obsolescence confirmée
+    if statut in ("obsolète", "obsolete"):
+        return "C0"
+
+    # Équipement confirmé actif / non obsolète
+    if statut == "actif":
+        return "C3"
+
+    # Statut non déterminé ou fin de vie annoncée : surveillance / vérification
+    return "C2"
+
 def make_row(i,ident,life):
     return {
         'Fabricant saisi/lu':i.get('fabricant',''),
@@ -355,6 +371,7 @@ def make_row(i,ident,life):
         'Niveau identification':ident.get('niveau_identification',''),
         "Validation identification":ident.get('statut_validation',''),
         'Statut cycle de vie':life.get('statut_cycle_vie',''),
+        'Criticité':criticite_simplifiee(life),
         'Disponibilité commerciale':life.get('disponibilite_commerciale',''),
         'Conclusion':life.get('conclusion_obsolescence',''),
         'Fin commercialisation':life.get('date_fin_commercialisation',''),
@@ -637,6 +654,7 @@ if rows:
         'Niveau identification',
         'Validation identification',
         'Statut cycle de vie',
+        'Criticité',
         'Disponibilité commerciale',
         "Commentaire d'analyse",
         'Action recommandée',
@@ -652,7 +670,23 @@ if rows:
     df = df[ordered]
 
     st.caption(f"{len(df)} équipement(s) dans la synthèse")
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    def style_criticite(value):
+        if value == "C0":
+            return "background-color: black; color: white; font-weight: bold;"
+        if value == "C2":
+            return "background-color: #FFC000; color: black; font-weight: bold;"
+        if value == "C3":
+            return "background-color: #92D050; color: black; font-weight: bold;"
+        return ""
+
+    if "Criticité" in df.columns:
+        try:
+            styled_df = df.style.map(style_criticite, subset=["Criticité"])
+        except AttributeError:
+            styled_df = df.style.applymap(style_criticite, subset=["Criticité"])
+        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+    else:
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
     c1,c2,c3 = st.columns(3)
     with c1:
